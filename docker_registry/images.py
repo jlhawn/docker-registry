@@ -168,45 +168,38 @@ def _valid_bytes_range(bytes_range):
     return True
 
 
-@app.route('/v1/private_images/<image_id>/layer', methods=['GET'])
-@toolkit.requires_auth
-@require_completion
-def get_private_image_layer(image_id):
-    try:
-        headers = None
-        bytes_range = None
-        if store.supports_bytes_range:
-            headers['Accept-Ranges'] = 'bytes'
-            bytes_range = _parse_bytes_range()
-        repository = toolkit.get_repository()
-        if not repository:
-            # No auth token found, either standalone registry or privileged
-            # access. In both cases, private images are "disabled"
-            return toolkit.api_error('Image not found', 404)
-        if not store.is_private(*repository):
-            return toolkit.api_error('Image not found', 404)
-        return _get_image_layer(image_id, headers, bytes_range)
-    except exceptions.FileNotFoundError:
-        return toolkit.api_error('Image not found', 404)
+def get_private_image_layer(image_id, repository):
+    headers = None
+    bytes_range = None
+    if store.supports_bytes_range:
+        headers['Accept-Ranges'] = 'bytes'
+        bytes_range = _parse_bytes_range()
+
+    return _get_image_layer(image_id, headers, bytes_range)
+
+
+@set_cache_headers
+@mirroring.source_lookup(cache=True, stream=True)
+def get_public_image_layer(image_id, repository, headers):
+    bytes_range = None
+    if store.supports_bytes_range:
+        headers['Accept-Ranges'] = 'bytes'
+        bytes_range = _parse_bytes_range()
+
+    return _get_image_layer(image_id, headers, bytes_range)
 
 
 @app.route('/v1/images/<image_id>/layer', methods=['GET'])
 @toolkit.requires_auth
 @require_completion
-@set_cache_headers
-@mirroring.source_lookup(cache=True, stream=True)
-def get_image_layer(image_id, headers):
+def get_image_layer(image_id):
     try:
-        bytes_range = None
-        if store.supports_bytes_range:
-            headers['Accept-Ranges'] = 'bytes'
-            bytes_range = _parse_bytes_range()
         repository = toolkit.get_repository()
         if repository and store.is_private(*repository):
-            return toolkit.api_error('Image not found', 404)
+            return get_private_image_layer(image_id, repository)
         # If no auth token found, either standalone registry or privileged
         # access. In both cases, access is always "public".
-        return _get_image_layer(image_id, headers, bytes_range)
+        return get_public_image_layer(image_id, repository)
     except exceptions.FileNotFoundError:
         return toolkit.api_error('Image not found', 404)
 
@@ -295,36 +288,23 @@ def put_image_checksum(image_id):
     return toolkit.response()
 
 
-@app.route('/v1/private_images/<image_id>/json', methods=['GET'])
-@toolkit.requires_auth
-@require_completion
-def get_private_image_json(image_id):
-    repository = toolkit.get_repository()
-    if not repository:
-        # No auth token found, either standalone registry or privileged access
-        # In both cases, private images are "disabled"
-        return toolkit.api_error('Image not found', 404)
-    try:
-        if not store.is_private(*repository):
-            return toolkit.api_error('Image not found', 404)
-        return _get_image_json(image_id)
-    except exceptions.FileNotFoundError:
-        return toolkit.api_error('Image not found', 404)
+@set_cache_headers
+@mirroring.source_lookup(cache=True, stream=False)
+def get_public_image_json(image_id, headers):
+    return _get_image_json(image_id, headers)
 
 
 @app.route('/v1/images/<image_id>/json', methods=['GET'])
 @toolkit.requires_auth
 @require_completion
-@set_cache_headers
-@mirroring.source_lookup(cache=True, stream=False)
 def get_image_json(image_id, headers):
     try:
         repository = toolkit.get_repository()
         if repository and store.is_private(*repository):
-            return toolkit.api_error('Image not found', 404)
+            return _get_image_json(image_id)
         # If no auth token found, either standalone registry or privileged
         # access. In both cases, access is always "public".
-        return _get_image_json(image_id, headers)
+        return get_public_image_json(image_id)
     except exceptions.FileNotFoundError:
         return toolkit.api_error('Image not found', 404)
 
@@ -420,39 +400,28 @@ def put_image_json(image_id):
     return toolkit.response()
 
 
-@app.route('/v1/private_images/<image_id>/files', methods=['GET'])
-@toolkit.requires_auth
-@require_completion
-def get_private_image_files(image_id, headers):
-    repository = toolkit.get_repository()
-    if not repository:
-        # No auth token found, either standalone registry or privileged access
-        # In both cases, private images are "disabled"
-        return toolkit.api_error('Image not found', 404)
-    try:
-        if not store.is_private(*repository):
-            return toolkit.api_error('Image not found', 404)
-        data = layers.get_image_files_json(image_id)
-        return toolkit.response(data, headers=headers, raw=True)
-    except exceptions.FileNotFoundError:
-        return toolkit.api_error('Image not found', 404)
-    except tarfile.TarError:
-        return toolkit.api_error('Layer format not supported', 400)
+def get_private_image_files(image_id):
+    data = layers.get_image_files_json(image_id)
+    return toolkit.response(data, headers=None, raw=True)
+
+
+@set_cache_headers
+def get_public_image_files(image_id, headers):
+    data = layers.get_image_files_json(image_id)
+    return toolkit.response(data, headers=headers, raw=True)
 
 
 @app.route('/v1/images/<image_id>/files', methods=['GET'])
 @toolkit.requires_auth
 @require_completion
-@set_cache_headers
-def get_image_files(image_id, headers):
+def get_image_files(image_id):
     try:
         repository = toolkit.get_repository()
         if repository and store.is_private(*repository):
-            return toolkit.api_error('Image not found', 404)
+            return get_private_image_files(image_id)
         # If no auth token found, either standalone registry or privileged
         # access. In both cases, access is always "public".
-        data = layers.get_image_files_json(image_id)
-        return toolkit.response(data, headers=headers, raw=True)
+        return get_public_image_files(image_id)
     except exceptions.FileNotFoundError:
         return toolkit.api_error('Image not found', 404)
     except tarfile.TarError:
